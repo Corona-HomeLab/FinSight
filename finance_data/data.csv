@@ -1,8 +1,3 @@
-date,type,name,value,category,description
-2024-11-24,asset,Savings Account,5000,,
-2024-11-24,asset,Car,15000,,
-2024-11-24,asset,Car,9000.0,,
-2024-11-24,liability,Credit Card,1000,,
-2024-11-24,liability,Student Loan,20000,,
-2024-11-24,transaction,,-150.5,Food,Grocery shopping
-2024-11-24,liability,Gas,40.0,,
+date,amount,category,description
+2024-11-24,2000.0,Income,Biweekly salary
+2024-11-24,500.0,Income,Bonus
