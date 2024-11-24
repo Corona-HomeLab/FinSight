@@ -23,7 +23,9 @@ jobs:
         pip install bandit safety pylint
 
     - name: Run Bandit
-      run: bandit -r . -f sarif -o bandit-results.sarif
+      run: |
+        bandit -r . -f json -o bandit-results.json
+        bandit -r . --format sarif --output bandit-results.sarif
       continue-on-error: true
 
     - name: Run Safety Check
