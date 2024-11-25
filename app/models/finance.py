@@ -46,11 +46,34 @@ class FinanceTracker:
         """View all records, or filter by 'income' or 'expense'"""
         with open(self.data_file, 'r') as f:
             records = list(csv.DictReader(f))
+            # Convert amount to float in each record
+            for record in records:
+                record['amount'] = float(record['amount'])
+            
             if record_type == 'income':
-                return [r for r in records if float(r['amount']) > 0]
+                return [r for r in records if r['amount'] > 0]
             elif record_type == 'expense':
-                return [r for r in records if float(r['amount']) < 0]
+                return [r for r in records if r['amount'] < 0]
             return records
+
+    def edit_record(self, index: int, amount: float, category: str, description: str):
+        """Edit a record at the specified index"""
+        records = []
+        with open(self.data_file, 'r') as f:
+            reader = csv.DictReader(f)
+            records = list(reader)
+        
+        if 0 <= index < len(records):
+            records[index]['amount'] = amount
+            records[index]['category'] = category
+            records[index]['description'] = description
+            
+            with open(self.data_file, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=['date', 'amount', 'category', 'description'])
+                writer.writeheader()
+                writer.writerows(records)
+            return True
+        return False
 
 def main():
     tracker = FinanceTracker()

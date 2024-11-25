@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Add Record - Finance Tracker{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6 offset-md-3">
+        <h2>Add New Record</h2>
+        <form method="POST">
+            <div class="mb-3">
+                <label class="form-label">Record Type</label>
+                <select name="type" class="form-select" required>
+                    <option value="Income">Income</option>
+                    <option value="Expense">Expense</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Description</label>
+                <input type="text" name="description" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Amount</label>
+                <input type="number" name="amount" class="form-control" step="0.01" min="0.01" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Add Record</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
