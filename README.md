@@ -1,55 +1,107 @@
 # FinSight
-Personal Finance app that feeds into AI to answer questions based on the info you provide it.
+
+A modern personal finance tracking application with both web and API interfaces. Built with Next.js for the frontend and Flask for the backend.
 
 ## Features
 
-- Record financial transactions with categories
-- Track income and expenses
-- Calculate real-time net worth
-- Edit existing financial records
+- Track income and expenses with detailed records
+- Calculate and monitor net worth in real-time
+- Modern, responsive UI with dark mode support
+- Edit and delete financial records
+- Comprehensive financial overview dashboard
 
-## Data Structure
+## Tech Stack
 
-The application stores financial data in CSV format with the following file:
+### Frontend
+- Next.js 15.0
+- TypeScript
+- Tailwind CSS
+- Heroicons
+- Custom color system with light/dark mode
 
-- `data.csv`: Stores records with date, amount, category, and description
+### Backend
+- Flask
+- Python
+- CSV-based data storage
 
-## Usage Example
+## Getting Started
 
-The `FinanceTracker` class in `app/models/finance.py` provides methods to manage your financial data:
+### Frontend Setup
+1. Navigate to the frontend directory:
 
-- **Add Record**: Use `add_record(amount: float, category: str, description: str)` to add an income (positive amount) or expense (negative amount) record.
-- **Calculate Net Worth**: Use `calculate_net_worth()` to compute the current net worth.
-- **View Records**: Use `view_records(record_type=None)` to view all records, or filter by 'income' or 'expense'.
-- **Edit Record**: Use `edit_record(index: int, amount: float, category: str, description: str)` to modify an existing record.
-
-### Example Code
-
-```python
-tracker = FinanceTracker()
-
-tracker.add_record(5000, "Income", "Salary")
-tracker.add_record(-150.50, "Expense", "Grocery shopping")
-
-net_worth_data = tracker.calculate_net_worth()
-print(f"Current Net Worth: ${net_worth_data['net_worth']:,.2f}")
+```bash
+cd frontend/finance-tracker
 ```
 
-This example demonstrates how to use the `FinanceTracker` class to manage your finances, track income and expenses, and calculate your net worth.
+2. Install dependencies:
+```bash
+npm install
+```
 
-## Web Interface
+3. Start the development server:
+```bash
+npm run dev
+```
 
-The application also provides a web interface built with Flask. You can perform the following actions through the web interface:
+The frontend will be available at `http://localhost:3000`
 
-- **Add Record**: Navigate to `/add_record` to add a new financial record.
-- **View Records**: Navigate to `/view_records` to see all your financial records.
-- **Edit Record**: Edit existing records directly from the records view.
-- **Net Worth Report**: Navigate to `/net_worth` to view a summary of your total income, expenses, and net worth.
+### Backend Setup
+1. Install Python dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-To run the web application, execute the following command:
-
+2. Start the Flask server:
 ```bash
 python run.py
 ```
 
-The application will be available at `http://localhost:5000`.
+The backend API will be available at `http://localhost:5000`
+
+## Project Structure
+
+### Frontend
+- `/app` - Next.js pages and layouts
+- `/components` - Reusable React components
+- `/lib` - API utilities and helpers
+- `/types` - TypeScript type definitions
+
+### Backend
+- `/app/routes` - Flask route handlers
+- `/app/models` - Data models and business logic
+- `/app/templates` - HTML templates
+
+## Features in Detail
+
+### Financial Records
+- Add income and expense records with descriptions
+- View all financial records in a sortable table
+- Edit existing records
+- Delete unwanted records
+
+### Net Worth Tracking
+- Real-time calculation of total income and expenses
+- Current net worth display
+- Visual representation of financial health
+
+### User Interface
+- Responsive design that works on mobile and desktop
+- Dark mode support for comfortable viewing
+- Intuitive navigation and data entry
+- Clean, modern aesthetic with consistent styling
+
+## Environment Variables
+
+Create a `.env` file in the frontend directory with:
+```
+API_BASE=http://localhost:5000
+NEXT_PUBLIC_API_BASE=http://localhost:5000
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
