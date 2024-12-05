@@ -15,31 +15,68 @@ class FinanceTracker:
         if not self.data_file.exists():
             with open(self.data_file, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['date', 'amount', 'category', 'description'])
+                writer.writerow(['date', 'individual', 'amount', 'category', 'description'])
 
-    def add_record(self, amount: float, category: str, description: str) -> bool:
+    def get_individuals(self) -> list:
+        """Get list of all individuals in the system"""
         try:
-            # First, check if the file exists and has headers
+            if not os.path.exists(self.data_file):
+                print(f"Data file does not exist at: {self.data_file}")
+                return []
+                
+            individuals = set()
+            with open(self.data_file, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                print("CSV Headers:", reader.fieldnames)  # Debug log
+                for row in reader:
+                    print("Processing row:", row)  # Debug log
+                    if 'individual' in row and row['individual']:
+                        individuals.add(row['individual'])
+            
+            result = sorted(list(individuals))
+            print(f"Found individuals: {result}")  # Debug log
+            return result
+        except Exception as e:
+            print(f"Error getting individuals: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def add_individual(self, name: str) -> bool:
+        """Add a new individual to the system"""
+        try:
+            if not os.path.exists(self.data_file):
+                self._initialize_file()
+                
+            new_record = {
+                'date': datetime.now().strftime('%Y-%m-%d'),
+                'individual': name,
+                'amount': '0',
+                'category': 'Initial',
+                'description': 'Account created'
+            }
+            
+            with open(self.data_file, 'a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=['date', 'individual', 'amount', 'category', 'description'])
+                if f.tell() == 0:  # If file is empty, write header
+                    writer.writeheader()
+                writer.writerow(new_record)
+                
+            return True
+        except Exception as e:
+            print(f"Error adding individual: {e}")
+            return False
+
+    def add_record(self, individual: str, amount: float, category: str, description: str) -> bool:
+        try:
             if not os.path.exists(self.data_file):
                 self._initialize_file()
             
-            # Read existing records to ensure we're not duplicating
-            existing_records = []
-            with open(self.data_file, 'r') as f:
-                reader = csv.DictReader(f)
-                existing_records = list(reader)
-            
-            # Append the new record
-            with open(self.data_file, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=['date', 'amount', 'category', 'description'])
-                writer.writeheader()
-                
-                # Write existing records
-                writer.writerows(existing_records)
-                
-                # Write new record
+            with open(self.data_file, 'a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=['date', 'individual', 'amount', 'category', 'description'])
                 new_record = {
                     'date': datetime.now().strftime('%Y-%m-%d'),
+                    'individual': individual,
                     'amount': str(amount),
                     'category': category,
                     'description': description
@@ -52,7 +89,42 @@ class FinanceTracker:
             print(f"Error adding record: {e}")
             return False
 
-    def calculate_net_worth(self):
+    def view_records(self, individual=None, record_type=None):
+        try:
+            if not os.path.exists(self.data_file):
+                print(f"Data file not found at: {self.data_file}")
+                return []
+            
+            records = []
+            with open(self.data_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Skip if individual is specified and doesn't match
+                    if individual and row.get('individual') != individual:
+                        continue
+                        
+                    record = {
+                        'date': row['date'],
+                        'amount': float(row['amount']),
+                        'category': row['category'],
+                        'description': row['description'],
+                        'individual': row.get('individual', '')
+                    }
+                    
+                    if record_type == 'income' and record['amount'] > 0:
+                        records.append(record)
+                    elif record_type == 'expense' and record['amount'] < 0:
+                        records.append(record)
+                    elif not record_type:
+                        records.append(record)
+                        
+            print(f"Records read from file: {records}")
+            return records
+        except Exception as e:
+            print(f"Error reading records: {e}")
+            return []
+
+    def calculate_net_worth(self, individual=None):
         """Calculate net worth based on all historical income and expenses"""
         income_total = 0
         expenses_total = 0
@@ -60,6 +132,10 @@ class FinanceTracker:
         with open(self.data_file, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
+                # Skip if individual is specified and doesn't match
+                if individual and row.get('individual') != individual:
+                    continue
+                    
                 amount = float(row['amount'])
                 if amount > 0:
                     income_total += amount
@@ -71,73 +147,6 @@ class FinanceTracker:
             'total_income': income_total,
             'total_expenses': expenses_total
         }
-
-    def view_records(self, record_type=None):
-        try:
-            if not os.path.exists(self.data_file):
-                print(f"Data file not found at: {self.data_file}")
-                return []
-            
-            records = []
-            with open(self.data_file, 'r') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    record = {
-                        'date': row['date'],
-                        'amount': float(row['amount']),
-                        'category': row['category'],
-                        'description': row['description']
-                    }
-                    if record_type == 'income' and record['amount'] > 0:
-                        records.append(record)
-                    elif record_type == 'expense' and record['amount'] < 0:
-                        records.append(record)
-                    elif not record_type:
-                        records.append(record)
-            print(f"Records read from file: {records}")
-            return records
-        except Exception as e:
-            print(f"Error reading records: {e}")
-            return []
-
-    def edit_record(self, index: int, amount: float, category: str, description: str):
-        """Edit a record at the specified index"""
-        records = []
-        with open(self.data_file, 'r') as f:
-            reader = csv.DictReader(f)
-            records = list(reader)
-        
-        if 0 <= index < len(records):
-            records[index]['amount'] = amount
-            records[index]['category'] = category
-            records[index]['description'] = description
-            
-            with open(self.data_file, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=['date', 'amount', 'category', 'description'])
-                writer.writeheader()
-                writer.writerows(records)
-            return True
-        return False
-
-    def delete_record(self, index: int) -> bool:
-        try:
-            records = []
-            with open(self.data_file, 'r') as f:
-                reader = csv.DictReader(f)
-                records = list(reader)
-            
-            if 0 <= index < len(records):
-                records.pop(index)
-                
-                with open(self.data_file, 'w', newline='') as f:
-                    writer = csv.DictWriter(f, fieldnames=['date', 'amount', 'category', 'description'])
-                    writer.writeheader()
-                    writer.writerows(records)
-                return True
-            return False
-        except Exception as e:
-            print(f"Error deleting record: {e}")
-            return False
 
 def main():
     tracker = FinanceTracker()
