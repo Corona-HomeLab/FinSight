@@ -11,6 +11,8 @@ from langchain_core.documents import Document
 from config import pinecone_api_key, pinecone_index_name, llama_endpoint, pattern_api_endpoint
 import json
 import requests
+import torch
+from prompts import PROMPT_TEMPLATES
 
 class RAG:
     def __init__(self):
@@ -18,12 +20,15 @@ class RAG:
             model=llama_endpoint,
             temperature=0,
             max_tokens=512,
+            request_timeout=120,
             base_url=llama_endpoint,
             api_key="not-needed"
         )
         
+        # Initialize embeddings with GPU support
         self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-mpnet-base-v2"
+            model_name="sentence-transformers/all-mpnet-base-v2",
+            model_kwargs={'device': 'cuda'} if torch.cuda.is_available() else {'device': 'cpu'}
         )
         
         # Fixed Pinecone initialization
@@ -33,6 +38,16 @@ class RAG:
             embedding=self.embeddings,
             index=index
         )
+        
+        self.prompt_templates = PROMPT_TEMPLATES
+        self.current_data_type = "transactions"
+
+    def set_data_type(self, data_type: str):
+        """Set the type of data being analyzed to use appropriate prompt"""
+        if data_type in self.prompt_templates:
+            self.current_data_type = data_type
+        else:
+            self.current_data_type = "default"
 
     def index_data(self, json_data: str):
         """Index JSON data into vector store using RecursiveJsonSplitter"""
@@ -41,8 +56,8 @@ class RAG:
         
         # Initialize RecursiveJsonSplitter with basic parameters
         splitter = RecursiveJsonSplitter(
-            max_chunk_size=1000,
-            min_chunk_size=200
+            max_chunk_size=500,
+            min_chunk_size=100,
         )
         
         # Split the JSON data
@@ -60,20 +75,13 @@ class RAG:
         self.vector_store.add_documents(documents=documents)
 
     def create_chain(self):
-        """Create the RAG chain with improved prompt"""
+        """Create the RAG chain with data-specific prompt"""
         retriever = self.vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 4}  # Retrieve top 4 most relevant chunks
+            search_kwargs={"k": 4}
         )
         
-        template = """You are a helpful financial assistant. Use the following pieces of transaction data to answer the question. If you cannot answer the question based on the provided data, say "I cannot answer this based on the available information."
-
-Context:
-{context}
-
-Question: {question}
-Answer: """
-        
+        template = self.prompt_templates[self.current_data_type]
         prompt = PromptTemplate.from_template(template)
         
         chain = (
@@ -86,11 +94,26 @@ Answer: """
         return chain
 
     def query(self, question: str) -> str:
-        """Query the RAG system with error handling"""
+        """Query the RAG system with improved timeout handling"""
         try:
             chain = self.create_chain()
-            response = chain.invoke(question)
-            return response
+            # Add timeout handling and retry logic
+            for attempt in range(3):  # Try up to 3 times
+                try:
+                    response = chain.invoke(
+                        question,
+                        config={
+                            "callbacks": None,
+                            "run_name": None,
+                            "timeout": 120  # Match the request_timeout
+                        }
+                    )
+                    return response.strip() if response else "No response received"
+                except TimeoutError:
+                    if attempt == 2:  # Last attempt
+                        return "Request timed out after multiple attempts"
+                    continue  # Try again
+            
         except Exception as e:
             return f"An error occurred: {str(e)}"
 
@@ -111,7 +134,11 @@ if __name__ == "__main__":
         
         # Fetch and index data from Pattern API
         json_data = rag.get_pattern_data()
+        rag.set_data_type("transactions")  # Set appropriate data type
         rag.index_data(json_data)
+        
+        print("\nFinancial Analysis System Ready!")
+        print("--------------------------------")
         
         # Interactive query loop
         while True:
@@ -119,8 +146,12 @@ if __name__ == "__main__":
             if question.lower() == 'quit':
                 break
                 
+            print("\nProcessing query...")
             answer = rag.query(question)
-            print(f"\nAnswer: {answer}")
+            print("\nAnswer:")
+            print("-------")
+            print(answer)
+            print("-------")
             
     except Exception as e:
         print(f"Application error: {str(e)}")    
