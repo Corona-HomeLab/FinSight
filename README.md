@@ -1,107 +1,73 @@
-# FinSight
+# Project Overview
 
-A modern personal finance tracking application with both web and API interfaces. Built with Next.js for the frontend and Flask for the backend.
+This project is a financial data analysis assistant designed to help users understand their financial data by answering questions about transactions and financial records. It leverages various components to load, process, and retrieve data from APIs and vector stores.
 
-## Features
+## Key Components
 
-- Track income and expenses with detailed records
-- Calculate and monitor net worth in real-time
-- Modern, responsive UI with dark mode support
-- Edit and delete financial records
-- Comprehensive financial overview dashboard
+### 1. **MQR (Multi-Query Retriever)**
+- **Purpose**: Manages API sources, processes data, and facilitates chat interactions.
+- **Key Functions**:
+  - `add_api_source`: Adds a new API source and loads its data.
+  - `remove_api_source`: Removes an API source and its documents from the vector store.
+  - `chat`: Handles user queries and retrieves relevant information.
+  - `get_retriever`: Initializes a retriever with optional namespace filtering.
 
-## Tech Stack
+### 2. **APILoader**
+- **Purpose**: Loads data from specified API endpoints and formats it into documents.
+- **Key Functions**:
+  - `load`: Fetches data from an API and converts it into a list of `Document` objects.
+  - `_format_content`: Formats the content of each document based on its type.
 
-### Frontend
-- Next.js 15.0
-- TypeScript
-- Tailwind CSS
-- Heroicons
-- Custom color system with light/dark mode
+### 3. **SourceManager**
+- **Purpose**: Manages the configuration and state of API sources.
+- **Key Functions**:
+  - `add_source`: Adds a new API source configuration.
+  - `remove_source`: Removes an existing API source.
+  - `get_active_sources`: Retrieves all active sources.
 
-### Backend
-- Flask
-- Python
-- CSV-based data storage
+### 4. **Prompts**
+- **Purpose**: Defines templates for generating queries and chat responses.
+- **Key Components**:
+  - `QUERY_PROMPT`: Template for generating multiple versions of a user question.
+  - `CHAT_PROMPT`: Template for generating responses to user queries.
 
-## Getting Started
+### 5. **Components**
+- **Purpose**: Initializes and configures the language model and vector store.
+- **Key Components**:
+  - `ChatOpenAI`: Configures the language model for generating responses.
+  - `PineconeVectorStore`: Manages the vector store for document retrieval.
 
-### Frontend Setup
-1. Navigate to the frontend directory:
+## Configuration
 
-```bash
-cd frontend/finance-tracker
-```
+- **API Keys and Endpoints**: Configured in `config.py`.
+- **Source Configurations**: Managed in `sources_config.json`.
 
-2. Install dependencies:
-```bash
-npm install
-```
+## Usage
 
-3. Start the development server:
-```bash
-npm run dev
-```
+1. **Command Mode**: 
+   - Add, remove, or list API sources.
+   - Switch to chat mode for interactive queries.
 
-The frontend will be available at `http://localhost:3000`
+2. **Chat Mode**: 
+   - Ask questions about financial data and receive detailed responses.
 
-### Backend Setup
-1. Install Python dependencies:
-```bash
-pip install -r requirements.txt
-```
+## Development
 
-2. Start the Flask server:
-```bash
-python run.py
-```
+- **Dependencies**: Ensure all required Python packages are installed.
+- **Environment**: Configure API keys and endpoints in `config.py`.
 
-The backend API will be available at `http://localhost:5000`
+## Security
 
-## Project Structure
+- **Sensitive Files**: `config.py` and `sources_config.json` are included in `.gitignore` to prevent accidental exposure of sensitive information.
 
-### Frontend
-- `/app` - Next.js pages and layouts
-- `/components` - Reusable React components
-- `/lib` - API utilities and helpers
-- `/types` - TypeScript type definitions
+## Workflow
 
-### Backend
-- `/app/routes` - Flask route handlers
-- `/app/models` - Data models and business logic
-- `/app/templates` - HTML templates
-
-## Features in Detail
-
-### Financial Records
-- Add income and expense records with descriptions
-- View all financial records in a sortable table
-- Edit existing records
-- Delete unwanted records
-
-### Net Worth Tracking
-- Real-time calculation of total income and expenses
-- Current net worth display
-- Visual representation of financial health
-
-### User Interface
-- Responsive design that works on mobile and desktop
-- Dark mode support for comfortable viewing
-- Intuitive navigation and data entry
-- Clean, modern aesthetic with consistent styling
-
-## Environment Variables
-
-Create a `.env` file in the frontend directory with:
-```
-API_BASE=http://localhost:5000
-NEXT_PUBLIC_API_BASE=http://localhost:5000
-```
+- **Bandit Security Linter**: Configured in `.github/workflows/bandit.yml` to scan for common security issues in the codebase.
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+- Contributions are welcome. Please ensure code quality and consistency with existing components.
+
+## License
+
+- This project is licensed under the MIT License.
