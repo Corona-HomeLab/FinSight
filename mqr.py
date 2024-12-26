@@ -88,34 +88,24 @@ class MQR(components):
                 params=source.params,
                 headers=source.headers,
                 data_key=source.data_key,
-                data_type=config.get('data_type', 'general')  # Add data type
+                data_type=config.get('data_type', 'general')
             )
             documents = loader.load()
             self.data_types.add(config.get('data_type', 'general'))
-            logging.info(f"Loaded {len(documents)} documents from API")
-            
-            # Print each document for debugging
-            for doc in documents:
-                logging.info(f"Document content: {doc.page_content}")
             
             # Split documents before adding to vector store
             split_docs = self.text_splitter.split_documents(documents)
-            logging.info(f"Split into {len(split_docs)} chunks")
             
-            # Ensure vector store is initialized
-            if not hasattr(self, 'vector_store') or self.vector_store is None:
-                logging.error("Vector store not initialized")
-                return False
+            # Add source_id to metadata for each document
+            for doc in split_docs:
+                doc.metadata['source_id'] = source_id
             
-            # Add documents to vector store
+            # Add documents to vector store and collect their IDs
             try:
-                self.vector_store.add_documents(split_docs)
-                logging.info("Documents successfully added to vector store")
-                
-                # Verify documents were added by doing a test query
-                test_results = self.vector_store.similarity_search("test", k=1)
-                logging.info(f"Test query result: {test_results[0].page_content if test_results else 'No results'}")
-                
+                ids = self.vector_store.add_documents(split_docs)
+                # Store document IDs in source config
+                self.source_manager.sources[source_id].document_ids = ids
+                self.source_manager._save_sources()
                 return True
             except Exception as e:
                 logging.error(f"Error adding documents to vector store: {str(e)}")
@@ -126,10 +116,24 @@ class MQR(components):
             return False
     
     def remove_api_source(self, source_id: str):
-        """Remove an API source"""
-        self.source_manager.remove_source(source_id)
-        # Note: Documents already in vector store will remain
-        # You might want to implement a way to remove them
+        """Remove an API source and its documents from the vector store"""
+        try:
+            source = self.source_manager.sources.get(source_id)
+            if source:
+                # Delete documents from Pinecone
+                if source.document_ids:
+                    logging.info(f"Deleting {len(source.document_ids)} documents from vector store")
+                    self.vector_store.delete(
+                        ids=source.document_ids,
+                        namespace=""
+                    )
+            
+            # Remove the source completely
+            logging.info(f"Removing source {source_id}")
+            self.source_manager.remove_source(source_id)
+        except Exception as e:
+            logging.error(f"Error removing source {source_id}: {str(e)}")
+            raise
 
     def get_retriever(self):
         if not hasattr(self, 'retriever_from_llm'):
@@ -201,6 +205,14 @@ class MQR(components):
     def logging(self):
         logging.basicConfig()
         logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
+
+    def _save_sources(self):
+        """Save sources config after updating document IDs"""
+        try:
+            self.source_manager._save_sources()
+            logging.info("Sources config saved successfully")
+        except Exception as e:
+            logging.error(f"Error saving sources config: {str(e)}")
 
 def main():
     mqr = MQR()

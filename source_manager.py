@@ -14,6 +14,7 @@ class APISourceConfig(BaseModel):
     data_key: Optional[str] = None
     active: bool = True
     added_at: datetime = datetime.now()
+    document_ids: Optional[list] = []
     
     class Config:
         json_encoders = {
@@ -30,19 +31,24 @@ class SourceManager:
         """Load sources from config file"""
         try:
             if os.path.exists(self.config_path):
+                logging.info(f"Loading sources from {self.config_path}")
                 with open(self.config_path, 'r') as f:
                     try:
                         data = json.load(f)
+                        logging.info(f"Loaded data: {json.dumps(data, indent=2)}")
                         for source_id, source_data in data.items():
                             source_data['added_at'] = datetime.fromisoformat(source_data['added_at'])
                             self.sources[source_id] = APISourceConfig(**source_data)
+                        logging.info(f"Loaded {len(self.sources)} sources")
                     except json.JSONDecodeError:
-                        # If the file is corrupted, start fresh
+                        logging.error("JSON file is corrupted")
                         self.sources = {}
-                        # Backup the corrupted file
                         if os.path.exists(self.config_path):
                             backup_path = f"{self.config_path}.bak"
                             os.rename(self.config_path, backup_path)
+            else:
+                logging.info(f"No config file found at {self.config_path}")
+                self.sources = {}
         except Exception as e:
             logging.error(f"Error loading sources: {str(e)}")
             self.sources = {}
@@ -76,11 +82,17 @@ class SourceManager:
         return source
     
     def remove_source(self, source_id: str):
-        """Deactivate a source"""
+        """Remove a source completely"""
         if source_id in self.sources:
-            self.sources[source_id].active = False
+            logging.info(f"Removing source {source_id} from sources")
+            del self.sources[source_id]  # Actually delete the source
             self._save_sources()
+            logging.info(f"Source {source_id} removed and config saved")
+        else:
+            logging.warning(f"Source {source_id} not found in sources")
     
     def get_active_sources(self) -> Dict[str, APISourceConfig]:
         """Get all active sources"""
-        return {id: source for id, source in self.sources.items() if source.active}
+        active_sources = {id: source for id, source in self.sources.items() if source.active}
+        logging.info(f"Found {len(active_sources)} active sources out of {len(self.sources)} total sources")
+        return active_sources
