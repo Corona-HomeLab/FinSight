@@ -9,6 +9,8 @@ class APISourceConfig(BaseModel):
     name: str
     endpoint: HttpUrl
     description: str
+    namespace: str
+    data_type: str = "general"
     params: Optional[dict] = {}
     headers: Optional[dict] = {}
     data_key: Optional[str] = None

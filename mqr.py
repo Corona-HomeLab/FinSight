@@ -96,13 +96,18 @@ class MQR(components):
             # Split documents before adding to vector store
             split_docs = self.text_splitter.split_documents(documents)
             
-            # Add source_id to metadata for each document
+            # Add source_id and namespace to metadata for each document
             for doc in split_docs:
                 doc.metadata['source_id'] = source_id
+                doc.metadata['data_type'] = config.get('data_type', 'general')
+                doc.metadata['namespace'] = source.namespace
             
-            # Add documents to vector store and collect their IDs
+            # Add documents to vector store with custom namespace
             try:
-                ids = self.vector_store.add_documents(split_docs)
+                ids = self.vector_store.add_documents(
+                    documents=split_docs,
+                    namespace=source.namespace  # Use the custom namespace
+                )
                 # Store document IDs in source config
                 self.source_manager.sources[source_id].document_ids = ids
                 self.source_manager._save_sources()
@@ -120,69 +125,115 @@ class MQR(components):
         try:
             source = self.source_manager.sources.get(source_id)
             if source:
-                # Delete documents from Pinecone
-                if source.document_ids:
-                    logging.info(f"Deleting {len(source.document_ids)} documents from vector store")
+                # Delete entire namespace from Pinecone
+                try:
+                    logging.info(f"Deleting namespace {source.namespace} from vector store")
                     self.vector_store.delete(
-                        ids=source.document_ids,
-                        namespace=""
+                        namespace=source.namespace,
+                        delete_all=True
                     )
-            
-            # Remove the source completely
-            logging.info(f"Removing source {source_id}")
-            self.source_manager.remove_source(source_id)
+                except Exception as e:
+                    # Log the error but continue with source removal
+                    logging.warning(f"Could not delete namespace {source.namespace}: {str(e)}")
+                    logging.warning("Continuing with source removal...")
+                
+                # Remove the source completely
+                logging.info(f"Removing source {source_id}")
+                self.source_manager.remove_source(source_id)
+                print(f"Source {source_id} removed successfully")
+            else:
+                logging.warning(f"Source {source_id} not found")
+                print(f"Source {source_id} not found")
         except Exception as e:
             logging.error(f"Error removing source {source_id}: {str(e)}")
-            raise
+            print(f"Error removing source {source_id}")
 
-    def get_retriever(self):
-        if not hasattr(self, 'retriever_from_llm'):
-            # Log vector store state
-            logging.info("Initializing retriever...")
-            try:
-                retriever = self.vector_store.as_retriever()
-                logging.info("Successfully created base retriever")
-                
-                self.retriever_from_llm = MultiQueryRetriever(
-                    retriever=retriever,
-                    llm_chain=self.llm_chain,
-                    parser_key="lines"
-                )
-                logging.info("Successfully created MultiQueryRetriever")
-            except Exception as e:
-                logging.error(f"Error creating retriever: {str(e)}")
-                raise
+    def get_retriever(self, namespaces=None):
+        """Get retriever with optional namespace filtering"""
+        # Log vector store state
+        logging.info("Initializing retriever...")
+        try:
+            # Convert list of namespaces to single namespace if only one exists
+            search_kwargs = {}
+            if namespaces:
+                if len(namespaces) == 1:
+                    search_kwargs["namespace"] = namespaces[0]
+                else:
+                    # For multiple namespaces, we'll need to search them one by one
+                    # and combine results, as Pinecone doesn't support multiple namespaces
+                    # in a single query
+                    search_kwargs["namespace"] = namespaces[0]  # Start with first namespace
+            
+            retriever = self.vector_store.as_retriever(
+                search_kwargs=search_kwargs
+            )
+            logging.info("Successfully created base retriever")
+            
+            self.retriever_from_llm = MultiQueryRetriever(
+                retriever=retriever,
+                llm_chain=self.llm_chain,
+                parser_key="lines"
+            )
+            logging.info("Successfully created MultiQueryRetriever")
+        except Exception as e:
+            logging.error(f"Error creating retriever: {str(e)}")
+            raise
         return self.retriever_from_llm
 
     def chat(self, question: str) -> str:
         """Process a chat question using the vector store for context"""
         try:
-            retriever = self.get_retriever()
-            search_results = retriever.get_relevant_documents(question)
+            # Determine relevant namespaces for the question
+            relevant_namespaces = self._get_relevant_namespaces(question)
+            logging.info(f"Searching in namespaces: {relevant_namespaces}")
             
-            # Pre-process documents to better handle user queries
-            if any(word in question.lower() for word in ['user', 'users', 'name', 'names']):
-                users = []
-                for doc in search_results:
+            # Get documents from all relevant namespaces
+            all_results = []
+            for namespace in relevant_namespaces:
+                retriever = self.get_retriever(namespaces=[namespace])
+                results = retriever.get_relevant_documents(question)
+                all_results.extend(results)
+            
+            # Extract username if asking about specific user's transactions
+            username_match = None
+            question_lower = question.lower()
+            if "transactions" in question_lower or "transaction" in question_lower:
+                # Look for common name patterns in the question
+                words = question_lower.split()
+                for word in words:
+                    if word not in ['transactions', 'for', 'any', 'the', 'what', 'are', 'there']:
+                        username_match = word
+                        break
+            
+            if username_match:
+                # First, verify if this user exists
+                user_exists = False
+                user_transactions = []
+                
+                for doc in all_results:
                     try:
-                        # Parse the content if it's a JSON string
-                        if isinstance(doc.page_content, str) and doc.page_content.startswith('{'):
-                            data = eval(doc.page_content)  # Safe since we control the content
-                            if 'username' in data:
-                                users.append(data)
+                        if isinstance(doc.page_content, str):
+                            if doc.metadata.get('data_type') == 'user':
+                                # Check user documents
+                                if username_match in doc.page_content.lower():
+                                    user_exists = True
+                            elif doc.metadata.get('data_type') in ['transactions', 'financial']:
+                                # Store potential transactions
+                                if username_match in doc.page_content.lower():
+                                    user_transactions.append(doc.page_content)
                     except:
                         continue
                 
-                # If we found users, format them specially
-                if users:
-                    context = "Users in the system:\n" + "\n".join(
-                        f"- Username: {user['username']}\n  ID: {user['id']}\n  Created: {user['created_at']}"
-                        for user in users
-                    )
+                # Format response based on findings
+                if not user_exists:
+                    context = f"I could not find any user with the name '{username_match}' in the system."
+                elif not user_transactions:
+                    context = f"While {username_match} is a user in the system, I could not find any transactions for them."
                 else:
-                    context = "\n".join(doc.page_content for doc in search_results)
+                    context = f"Found the following transactions for {username_match}:\n" + "\n".join(user_transactions)
             else:
-                context = "\n".join(doc.page_content for doc in search_results)
+                # Default handling for non-user-specific queries
+                context = "\n".join(doc.page_content for doc in all_results)
             
             response = self.chat_chain.invoke({
                 "context": context,
@@ -213,6 +264,48 @@ class MQR(components):
             logging.info("Sources config saved successfully")
         except Exception as e:
             logging.error(f"Error saving sources config: {str(e)}")
+
+    def _get_relevant_namespaces(self, question: str) -> list[str]:
+        """Determine which namespaces are most relevant to the question"""
+        # Get all active sources
+        sources = self.source_manager.get_active_sources()
+        
+        # If question contains specific data type keywords, prioritize those namespaces
+        question_lower = question.lower()
+        relevant_namespaces = []
+        
+        # Check for transaction-related queries
+        if any(word in question_lower for word in ['transaction', 'transactions', 'payment', 'payments']):
+            # For user-specific transaction queries, we need both user and transaction namespaces
+            words = question_lower.split()
+            for word in words:
+                if word not in ['transactions', 'for', 'any', 'the', 'what', 'are', 'there']:
+                    # Potential username found, include both user and transaction namespaces
+                    relevant_namespaces.extend(
+                        source.namespace for source in sources.values()
+                        if source.data_type in ['user', 'users', 'transactions', 'financial', 'general']
+                    )
+                    break
+            # If no specific user mentioned, just include transaction namespaces
+            if not relevant_namespaces:
+                relevant_namespaces.extend(
+                    source.namespace for source in sources.values()
+                    if source.data_type in ['transactions', 'financial', 'general']
+                )
+        
+        # Check for user-related queries
+        elif any(word in question_lower for word in ['user', 'users', 'name', 'names']):
+            relevant_namespaces.extend(
+                source.namespace for source in sources.values()
+                if source.data_type in ['user', 'users', 'general']
+            )
+        
+        # If no specific type matches, use all active sources
+        if not relevant_namespaces:
+            relevant_namespaces = [source.namespace for source in sources.values()]
+        
+        logging.info(f"Selected namespaces for query: {relevant_namespaces}")
+        return list(set(relevant_namespaces))  # Remove duplicates
 
 def main():
     mqr = MQR()
@@ -246,6 +339,7 @@ def main():
                 source_id = input("Enter source ID: ").strip()
                 endpoint = input("Enter API endpoint: ").strip()
                 description = input("Enter description: ").strip()
+                namespace = input("Enter namespace (press enter to use source ID): ").strip() or source_id
                 data_key = input("Enter data key (optional): ").strip() or None
                 data_type = input("Enter data type (or press enter for general): ").strip() or "general"
                 
@@ -257,6 +351,7 @@ def main():
                     "name": source_id,
                     "endpoint": endpoint,
                     "description": description,
+                    "namespace": namespace,
                     "data_key": data_key,
                     "data_type": data_type
                 }
