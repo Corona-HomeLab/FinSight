@@ -4,6 +4,8 @@ from pydantic import BaseModel, HttpUrl
 import json
 import os
 import logging
+import requests
+from langchain.schema import Document
 
 class APISourceConfig(BaseModel):
     name: str
@@ -17,6 +19,8 @@ class APISourceConfig(BaseModel):
     active: bool = True
     added_at: datetime = datetime.now()
     document_ids: Optional[list] = []
+    user_id: Optional[str] = None
+    username: Optional[str] = None
     
     class Config:
         json_encoders = {
@@ -98,3 +102,30 @@ class SourceManager:
         active_sources = {id: source for id, source in self.sources.items() if source.active}
         logging.info(f"Found {len(active_sources)} active sources out of {len(self.sources)} total sources")
         return active_sources
+    
+    def load(self) -> list[Document]:
+        response = requests.get(self.endpoint, params=self.params, headers=self.headers)
+        response.raise_for_status()
+        
+        data = response.json()
+        if self.data_key:
+            data = data[self.data_key]
+        
+        if isinstance(data, list):
+            documents = []
+            for item in data:
+                if self.data_type == 'transactions' and not self.validate_transaction(item):
+                    continue
+                content, metadata = self._format_content(item)
+                documents.append(Document(page_content=content, metadata=metadata))
+            logging.info(f"Created {len(documents)} {self.data_type} documents")
+            return documents
+        else:
+            content, metadata = self._format_content(data)
+            return [Document(page_content=content, metadata=metadata)]
+    
+    def validate_transaction(self, item: dict) -> bool:
+        """Validate that the transaction belongs to the configured user"""
+        if not self.user_id:
+            return True
+        return str(item.get('user_id', '')) == self.user_id

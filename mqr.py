@@ -6,18 +6,23 @@ from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_openai import ChatOpenAI
 from langchain.chains import LLMChain
 import logging
+import string
 from langchain_community.document_loaders.base import BaseLoader
 from langchain_core.documents import Document
 import requests
 from source_manager import SourceManager
 
 class APILoader(BaseLoader):
-    def __init__(self, endpoint, params=None, headers=None, data_key=None, data_type=None):
+    def __init__(self, endpoint, params=None, headers=None, data_key=None, data_type=None, 
+                 base_url=None, username=None, user_id=None):
         self.endpoint = endpoint
         self.params = params or {}
         self.headers = headers or {}
         self.data_key = data_key
-        self.data_type = data_type  # New field to specify type of financial data
+        self.data_type = data_type
+        self.base_url = base_url
+        self.username = username
+        self.user_id = user_id
     
     def load(self) -> list[Document]:
         response = requests.get(self.endpoint, params=self.params, headers=self.headers)
@@ -30,43 +35,66 @@ class APILoader(BaseLoader):
         if isinstance(data, list):
             documents = []
             for item in data:
-                content = self._format_content(item)
-                documents.append(Document(page_content=content, metadata={"type": self.data_type}))
+                content, metadata = self._format_content(item)
+                documents.append(Document(page_content=content, metadata=metadata))
             logging.info(f"Created {len(documents)} {self.data_type} documents")
             return documents
         else:
-            return [Document(page_content=str(data), metadata={"type": self.data_type})]
+            content, metadata = self._format_content(data)
+            return [Document(page_content=content, metadata=metadata)]
     
     def _format_content(self, item):
         """Format content based on data type and structure"""
-        content_lines = []
-        
-        # Handle dictionary data
         if isinstance(item, dict):
-            # First, try to identify if this is a user record
             if 'username' in item:
-                content_lines.extend([
-                    "Record Type: User",
-                    f"Username: {item['username']}",
-                    *[f"{k.title()}: {v}" for k, v in item.items() if k != 'username']
-                ])
-            # Handle financial records
-            elif any(key in item for key in ['amount', 'balance', 'value']):
-                content_lines.extend([
-                    "Record Type: Financial",
-                    *[f"{k.title()}: {'$' + str(v) if k in ['amount', 'balance', 'value'] else v}"
-                      for k, v in item.items()]
-                ])
-            # Handle any other type of record
-            else:
-                content_lines.extend([
-                    f"{k.title()}: {v}" for k, v in item.items()
-                    if not k.startswith('_')
-                ])
+                # User record formatting remains the same
+                metadata = {
+                    "type": "user",
+                    "data_type": "user",
+                    "user_id": str(item.get('id', '')),
+                    "username": item['username'].lower(),
+                }
+                content = f"User {item['username']} with ID {item.get('id', '')}"
+                
+            elif any(key in item for key in ['amount', 'transaction_id', 'user_id']):
+                # Use the configured username instead of fetching it
+                metadata = {
+                    "type": "transaction",
+                    "data_type": "transaction",
+                    "user_id": str(item.get('user_id', '')),
+                    "username": self.username,  # Use configured username
+                    "transaction_id": str(item.get('id', '')),
+                    "category": item.get('category', ''),
+                    "amount": str(item.get('amount', 0)),
+                    "date": item.get('date', '').split('T')[0],
+                    "merchant": item.get('name', ''),
+                    "transaction_type": "credit" if item.get('amount', 0) < 0 else "debit"
+                }
+                
+                content = (
+                    f"A {metadata['transaction_type']} transaction of ${abs(float(metadata['amount']))} "
+                    f"by {self.username if self.username else f'user {metadata["user_id"]}'} "
+                    f"at {metadata['merchant']} on {metadata['date']} "
+                    f"in the {metadata['category'].replace('_', ' ').title()} category."
+                )
         else:
-            content_lines.append(str(item))
+            metadata = {"type": "unknown", "data_type": "unknown"}
+            content = str(item)
         
-        return "\n".join(content_lines)
+        return content, metadata
+
+    def _get_username_for_user_id(self, user_id: str) -> str:
+        """Helper method to get username for a given user_id"""
+        try:
+            # Assuming you have access to the users data
+            # This could be from a cache, database, or API call
+            response = requests.get(f"{self.base_url}/users/{user_id}")
+            if response.status_code == 200:
+                user_data = response.json()
+                return user_data.get('username', '')
+        except Exception as e:
+            logging.error(f"Error fetching username for user_id {user_id}: {str(e)}")
+        return ''
 
 class MQR(components):
     def __init__(self):
@@ -83,15 +111,62 @@ class MQR(components):
         """Add a new API source and load its data"""
         try:
             source = self.source_manager.add_source(source_id, config)
+            endpoint_parts = str(source.endpoint).split('/')
+            base_url = f"{endpoint_parts[0]}//{endpoint_parts[2]}"
+            
             loader = APILoader(
                 endpoint=str(source.endpoint),
                 params=source.params,
                 headers=source.headers,
                 data_key=source.data_key,
-                data_type=config.get('data_type', 'general')
+                data_type=config.get('data_type', 'general'),
+                base_url=base_url,
+                username=config.get('username'),
+                user_id=config.get('user_id')
             )
             documents = loader.load()
             self.data_types.add(config.get('data_type', 'general'))
+            
+            # Use different chunking strategies based on data type
+            if config.get('data_type') == 'transactions':
+                # For transactions, keep them as individual documents but add a summary document
+                transactions_by_user = {}
+                for doc in documents:
+                    username = doc.metadata.get('username')
+                    if username:
+                        if username not in transactions_by_user:
+                            transactions_by_user[username] = []
+                        transactions_by_user[username].append(doc)
+                
+                # Create summary documents for each user
+                summary_docs = []
+                for username, user_docs in transactions_by_user.items():
+                    total_debit = sum(float(d.metadata['amount']) for d in user_docs if d.metadata['transaction_type'] == 'debit')
+                    total_credit = sum(float(d.metadata['amount']) for d in user_docs if d.metadata['transaction_type'] == 'credit')
+                    
+                    summary_content = (
+                        f"Transaction summary for {username}: "
+                        f"Total of {len(user_docs)} transactions. "
+                        f"Total debits: ${total_debit:.2f}. "
+                        f"Total credits: ${total_credit:.2f}. "
+                        f"Net change: ${(total_debit + total_credit):.2f}"
+                    )
+                    
+                    summary_docs.append(Document(
+                        page_content=summary_content,
+                        metadata={
+                            'type': 'transaction_summary',
+                            'data_type': 'transaction_summary',
+                            'username': username,
+                            'source_id': source_id,
+                            'namespace': source.namespace
+                        }
+                    ))
+                
+                documents.extend(summary_docs)
+            else:
+                # Use regular text splitting for other document types
+                documents = self.text_splitter.split_documents(documents)
             
             # Split documents before adding to vector store
             split_docs = self.text_splitter.split_documents(documents)
@@ -101,15 +176,18 @@ class MQR(components):
                 doc.metadata['source_id'] = source_id
                 doc.metadata['data_type'] = config.get('data_type', 'general')
                 doc.metadata['namespace'] = source.namespace
+                # Ensure username is never null in metadata
+                if 'username' in doc.metadata and doc.metadata['username'] is None:
+                    doc.metadata['username'] = config.get('username', 'unknown')
             
             # Add documents to vector store with custom namespace
             try:
                 ids = self.vector_store.add_documents(
                     documents=split_docs,
-                    namespace=source.namespace  # Use the custom namespace
+                    namespace=source.namespace
                 )
                 # Store document IDs in source config
-                self.source_manager.sources[source_id].document_ids = ids
+                source.document_ids = ids
                 self.source_manager._save_sources()
                 return True
             except Exception as e:
@@ -150,90 +228,95 @@ class MQR(components):
 
     def get_retriever(self, namespaces=None):
         """Get retriever with optional namespace filtering"""
-        # Log vector store state
         logging.info("Initializing retriever...")
         try:
-            # Convert list of namespaces to single namespace if only one exists
-            search_kwargs = {}
             if namespaces:
-                if len(namespaces) == 1:
-                    search_kwargs["namespace"] = namespaces[0]
-                else:
-                    # For multiple namespaces, we'll need to search them one by one
-                    # and combine results, as Pinecone doesn't support multiple namespaces
-                    # in a single query
-                    search_kwargs["namespace"] = namespaces[0]  # Start with first namespace
-            
+                # Add debug logging for namespace content
+                for namespace in namespaces:
+                    try:
+                        # Test vector store content
+                        doc_count = self.vector_store.similarity_search(
+                            "test",
+                            k=1,
+                            namespace=namespace
+                        )
+                        logging.info(f"Namespace {namespace} contains {len(doc_count)} searchable documents")
+                    except Exception as e:
+                        logging.error(f"Error checking namespace {namespace}: {str(e)}")
+
             retriever = self.vector_store.as_retriever(
-                search_kwargs=search_kwargs
+                search_type="similarity"
             )
-            logging.info("Successfully created base retriever")
             
-            self.retriever_from_llm = MultiQueryRetriever(
-                retriever=retriever,
-                llm_chain=self.llm_chain,
-                parser_key="lines"
-            )
-            logging.info("Successfully created MultiQueryRetriever")
+            logging.info(f"Created retriever for namespace: {namespaces[0] if namespaces else 'all'}")
+            return retriever
         except Exception as e:
             logging.error(f"Error creating retriever: {str(e)}")
             raise
-        return self.retriever_from_llm
 
     def chat(self, question: str) -> str:
-        """Process a chat question using the vector store for context"""
         try:
-            # Determine relevant namespaces for the question
-            relevant_namespaces = self._get_relevant_namespaces(question)
+            # Extract username and determine if it's a user query
+            username = None
+            question_lower = question.lower()
+            is_user_query = any(keyword in question_lower for keyword in ['users', 'user', 'who'])
+            
+            if not is_user_query:
+                # Only try to extract username if it's not a user query
+                words = question_lower.translate(str.maketrans('', '', string.punctuation)).split()
+                for word in words:
+                    if word not in ['transactions', 'for', 'any', 'the', 'what', 'are', 'there', 'summary', 
+                                  'categories', 'can', 'you', 'see', 'of', 'in', 'by', 'from']:
+                        for source in self.source_manager.get_active_sources().values():
+                            if source.username and word == source.username.lower():
+                                username = source.username
+                                break
+                    if username:
+                        break
+
+            relevant_namespaces = self._get_relevant_namespaces(question, username)
+            if not relevant_namespaces:
+                return "I couldn't find any data for that user. Please verify the username and try again."
+            
             logging.info(f"Searching in namespaces: {relevant_namespaces}")
             
-            # Get documents from all relevant namespaces
             all_results = []
             for namespace in relevant_namespaces:
-                retriever = self.get_retriever(namespaces=[namespace])
-                results = retriever.get_relevant_documents(question)
-                all_results.extend(results)
+                try:
+                    # Set filter conditions based on query type
+                    if is_user_query:
+                        filter_conditions = {"type": "user"}
+                    else:
+                        filter_conditions = {
+                            "type": "transaction",
+                            "username": username.lower() if username else None
+                        }
+                    
+                    logging.info(f"Searching namespace {namespace} with filters: {filter_conditions}")
+                    
+                    results = self.vector_store.similarity_search(
+                        question,
+                        k=50,
+                        namespace=namespace,
+                        filter=filter_conditions
+                    )
+                    
+                    logging.info(f"Found {len(results)} documents in {namespace}")
+                    all_results.extend(results)
+                    
+                except Exception as e:
+                    logging.error(f"Error searching namespace {namespace}: {str(e)}")
+                    continue
             
-            # Extract username if asking about specific user's transactions
-            username_match = None
-            question_lower = question.lower()
-            if "transactions" in question_lower or "transaction" in question_lower:
-                # Look for common name patterns in the question
-                words = question_lower.split()
-                for word in words:
-                    if word not in ['transactions', 'for', 'any', 'the', 'what', 'are', 'there']:
-                        username_match = word
-                        break
+            if not all_results:
+                return "I couldn't find any relevant information in the database. Please verify the data has been properly loaded."
             
-            if username_match:
-                # First, verify if this user exists
-                user_exists = False
-                user_transactions = []
-                
-                for doc in all_results:
-                    try:
-                        if isinstance(doc.page_content, str):
-                            if doc.metadata.get('data_type') == 'user':
-                                # Check user documents
-                                if username_match in doc.page_content.lower():
-                                    user_exists = True
-                            elif doc.metadata.get('data_type') in ['transactions', 'financial']:
-                                # Store potential transactions
-                                if username_match in doc.page_content.lower():
-                                    user_transactions.append(doc.page_content)
-                    except:
-                        continue
-                
-                # Format response based on findings
-                if not user_exists:
-                    context = f"I could not find any user with the name '{username_match}' in the system."
-                elif not user_transactions:
-                    context = f"While {username_match} is a user in the system, I could not find any transactions for them."
-                else:
-                    context = f"Found the following transactions for {username_match}:\n" + "\n".join(user_transactions)
-            else:
-                # Default handling for non-user-specific queries
-                context = "\n".join(doc.page_content for doc in all_results)
+            # Format context from retrieved documents
+            context = "\n".join(f"Document from {doc.metadata.get('namespace', 'unknown')}: {doc.page_content}" 
+                              for doc in all_results)
+            
+            logging.info(f"Total context length: {len(context)}")
+            logging.info(f"Context preview: {context[:200]}")
             
             response = self.chat_chain.invoke({
                 "context": context,
@@ -242,13 +325,8 @@ class MQR(components):
                                          for q, a in self.chat_history])
             })
             
-            if hasattr(response, 'content'):
-                response_text = response.content
-            else:
-                response_text = str(response)
+            return response.content if hasattr(response, 'content') else str(response)
             
-            self.chat_history.append((question, response_text))
-            return response_text
         except Exception as e:
             logging.error(f"Error in chat: {str(e)}")
             return "I encountered an error while processing your question. Please try again."
@@ -265,47 +343,29 @@ class MQR(components):
         except Exception as e:
             logging.error(f"Error saving sources config: {str(e)}")
 
-    def _get_relevant_namespaces(self, question: str) -> list[str]:
+    def _get_relevant_namespaces(self, question: str, username: str = None) -> list[str]:
         """Determine which namespaces are most relevant to the question"""
-        # Get all active sources
         sources = self.source_manager.get_active_sources()
-        
-        # If question contains specific data type keywords, prioritize those namespaces
         question_lower = question.lower()
         relevant_namespaces = []
         
-        # Check for transaction-related queries
-        if any(word in question_lower for word in ['transaction', 'transactions', 'payment', 'payments']):
-            # For user-specific transaction queries, we need both user and transaction namespaces
-            words = question_lower.split()
-            for word in words:
-                if word not in ['transactions', 'for', 'any', 'the', 'what', 'are', 'there']:
-                    # Potential username found, include both user and transaction namespaces
-                    relevant_namespaces.extend(
-                        source.namespace for source in sources.values()
-                        if source.data_type in ['user', 'users', 'transactions', 'financial', 'general']
-                    )
-                    break
-            # If no specific user mentioned, just include transaction namespaces
-            if not relevant_namespaces:
-                relevant_namespaces.extend(
-                    source.namespace for source in sources.values()
-                    if source.data_type in ['transactions', 'financial', 'general']
-                )
+        # Check if this is a user-related query
+        user_keywords = ['users', 'user', 'who']
+        is_user_query = any(keyword in question_lower for keyword in user_keywords)
         
-        # Check for user-related queries
-        elif any(word in question_lower for word in ['user', 'users', 'name', 'names']):
-            relevant_namespaces.extend(
-                source.namespace for source in sources.values()
-                if source.data_type in ['user', 'users', 'general']
-            )
-        
-        # If no specific type matches, use all active sources
-        if not relevant_namespaces:
-            relevant_namespaces = [source.namespace for source in sources.values()]
+        if is_user_query:
+            # For user queries, include the users namespace
+            for source in sources.values():
+                if source.data_type == 'users' or source.namespace == 'users':
+                    relevant_namespaces.append(source.namespace)
+        elif username:
+            # For user-specific transaction queries
+            for source in sources.values():
+                if source.username and source.username.lower() == username.lower():
+                    relevant_namespaces.append(source.namespace)
         
         logging.info(f"Selected namespaces for query: {relevant_namespaces}")
-        return list(set(relevant_namespaces))  # Remove duplicates
+        return relevant_namespaces
 
 def main():
     mqr = MQR()
@@ -342,6 +402,8 @@ def main():
                 namespace = input("Enter namespace (press enter to use source ID): ").strip() or source_id
                 data_key = input("Enter data key (optional): ").strip() or None
                 data_type = input("Enter data type (or press enter for general): ").strip() or "general"
+                username = input("Enter username (optional): ").strip() or None
+                user_id = input("Enter user ID (optional): ").strip() or None
                 
                 if not endpoint:
                     print("Error: API endpoint cannot be empty")
@@ -353,7 +415,9 @@ def main():
                     "description": description,
                     "namespace": namespace,
                     "data_key": data_key,
-                    "data_type": data_type
+                    "data_type": data_type,
+                    "username": username,
+                    "user_id": user_id
                 }
                 
                 if mqr.add_api_source(source_id, config):
