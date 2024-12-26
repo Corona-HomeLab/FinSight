@@ -1,3 +1,5 @@
 config.py
 /__pycache__/
 /data
+/sources_config.json
+/sources_config.json.bak
